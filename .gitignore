@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.pyc
+
+# CI artifacts (generated, not source)
+security-report.md
+trivy-fs.txt
+tfsec.md
+
+# OS
+.DS_Store
+Thumbs.db

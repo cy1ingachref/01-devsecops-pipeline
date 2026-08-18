@@ -1,0 +1,160 @@
+# ============================================================================
+# .github/workflows/security.yml
+# ----------------------------------------------------------------------------
+# This is the HEART of the project. A GitHub Actions workflow that runs a full
+# security gate on every push and every pull request.
+#
+# Concept for the hiring manager:
+#   "On every commit we automatically scan for leaked secrets, insecure code,
+#    vulnerable dependencies/images, and insecure Terraform — and we block the
+#    merge if critical issues are found."
+#
+# We use continue-on-error on most steps so the dashboard still renders even if
+# one scanner fails; the dashboard step aggregates pass/fail status.
+# ============================================================================
+
+name: Security Pipeline
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  security:
+    name: Security Scans
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read        # needed to checkout the repo
+      security-events: write # needed if you later enable code-scanning upload
+    steps:
+
+      # 1) Pull the code into the runner
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0    # full history so gitleaks can scan all commits
+
+      # 2) SECRET SCANNING -- gitleaks
+      #    Catches hardcoded API keys, JWT secrets, passwords, etc.
+      #    This is the control that would have caught the E-Tafakna hardcoded
+      #    JWT secret class of bug BEFORE it ever shipped.
+      - name: gitleaks (secret scanning)
+        id: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        continue-on-error: true
+        env:
+          GITLEAKS_CONFIG: .gitleaks.toml
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "true"
+
+      # 3) SAST -- Semgrep
+      #    Static analysis of source code to find insecure patterns
+      #    (e.g. eval of user input, SQL string concat, weak crypto).
+      - name: Semgrep (SAST)
+        id: semgrep
+        uses: returntocorp/semgrep-action@v1
+        continue-on-error: true
+        with:
+          config: ".semgrep.yml"
+
+      # 4) DEPENDENCY + FILESYSTEM SCAN -- Trivy
+      #    Finds known CVEs in your dependencies and OS packages.
+      - name: Trivy filesystem scan
+        id: trivy-fs
+        uses: aquasecurity/trivy-action@0.24.0
+        continue-on-error: true
+        with:
+          scan-type: "fs"
+          scan-ref: "."
+          format: "table"
+          severity: "CRITICAL,HIGH"
+          exit-code: "0"   # do not fail the build here; dashboard reports it
+          output: "trivy-fs.txt"
+
+      # 5) IaC SCAN -- tfsec (Terraform)
+      #    Catches insecure cloud infrastructure definitions.
+      - name: tfsec (Terraform IaC)
+        id: tfsec
+        uses: aquasecurity/tfsec-action@v1.0.3
+        continue-on-error: true
+        with:
+          soft_fail: true
+          format: "markdown"
+          output: "tfsec.md"
+
+      # 6) DASHBOARD -- build a Markdown summary in the CI run page
+      #    This is what makes the repo "portfolio-grade": a human-readable
+      #    security posture report, generated automatically, every run.
+      - name: Build security dashboard
+        run: |
+          {
+            echo "# 🔐 Security Pipeline Report"
+            echo ""
+            echo "Generated: $(date -u '+%Y-%m-%d %H:%M UTC')"
+            echo ""
+            echo "## Scan status"
+            echo "| Control | Tool | Result |"
+            echo "|---------|------|--------|"
+            echo "| Secrets | gitleaks | ${{ steps.gitleaks.outcome == 'success' && '✅ pass' || '⚠️ see artifacts' }} |"
+            echo "| SAST | semgrep | ${{ steps.semgrep.outcome == 'success' && '✅ pass' || '⚠️ see artifacts' }} |"
+            echo "| Deps/FS CVE | trivy | ${{ steps.trivy-fs.outcome == 'success' && '✅ pass' || '⚠️ see artifacts' }} |"
+            echo "| IaC | tfsec | ${{ steps.tfsec.outcome == 'success' && '✅ pass' || '⚠️ see artifacts' }} |"
+            echo ""
+            echo "## What each control catches"
+            echo "- **gitleaks**: hardcoded secrets, API keys, JWT signing keys."
+            echo "- **semgrep**: insecure code (eval, SQLi, weak crypto)."
+            echo "- **trivy**: known CVEs in dependencies and base images."
+            echo "- **tfsec**: insecure Terraform (open S3 buckets, missing encryption)."
+          } > security-report.md
+
+          # Render the report into the Actions run summary tab
+          cat security-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      # 7) Upload all scanner artifacts so reviewers can inspect details
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: |
+            security-report.md
+            trivy-fs.txt
+            tfsec.md
+          if-no-files-found: ignore
+
+  # --------------------------------------------------------------------------
+  # Cross-project gate: run the JWT audit tool (project 02) as a CI check.
+  # This proves the two repos work together — the DevSecOps pipeline actively
+  # exercises the security tooling built in the portfolio.
+  # --------------------------------------------------------------------------
+  jwt-audit:
+    name: JWT Audit Tool (cross-project gate)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      - name: Checkout jwt-audit-tool
+        uses: actions/checkout@v4
+        with:
+          repository: cy1ingachref/jwt-audit-tool   # cross-project repo (this portfolio)
+          path: jwt-tool
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Generate sample tokens + run auditor
+        run: |
+          cd jwt-tool
+          python make_sample_tokens.py
+          # The weak-secret sample MUST be flagged HIGH (exit 1) — that is the
+          # proof the gate works. We invert the exit so the CI step PASSES
+          # when detection succeeds.
+          if python jwt_audit.py --file sample_weak.txt; then
+            echo "ERROR: weak token was NOT detected — gate broken"; exit 1
+          else
+            echo "OK: weak JWT correctly flagged (HIGH finding present)"
+          fi

@@ -1,0 +1,36 @@
+# .gitleaks.toml
+# ----------------------------------------------------------------------------
+# gitleaks configuration. gitleaks detects secrets by regex + entropy heuristics.
+# The default ruleset already covers AWS keys, JWTs, RSA private keys, generic
+# API keys, etc. We extend it with a rule specifically for the class of bug
+# you found at E-Tafakna: a hardcoded JWT HS256 signing secret in source code.
+# ----------------------------------------------------------------------------
+
+title = "DevSecOps Pipeline gitleaks config"
+
+[extend]
+# Use gitleaks' built-in default rules, then add our custom ones below.
+useDefault = true
+
+# Allowlist: paths that are supposed to contain secrets (never flag these).
+[allowlist]
+paths = [
+  '''.github/workflows/.*''',
+  '''README\.md''',
+  '''GUIDE\.md''',
+]
+
+# Custom rule: catch a hardcoded JWT secret assignment like
+#   JWT_SECRET = "supersecret..."   or   SECRET_KEY = "...."
+[[rules]]
+id = "jwt-hardcoded-secret"
+description = "Possible hardcoded JWT/HMAC signing secret in source code"
+regex = '''(?i)(JWT_SECRET|SECRET_KEY|TOKEN_SECRET|API_SECRET)\s*[:=]\s*['"][0-9a-zA-Z_\-]{8,}['"]'''
+entropy = 3.0
+keywords = ["JWT_SECRET", "SECRET_KEY", "TOKEN_SECRET", "API_SECRET"]
+
+[[rules]]
+id = "hardcoded-password-in-code"
+description = "Possible hardcoded password assignment"
+regex = '''(?i)(password|passwd|pwd)\s*[:=]\s*['"][^'"]{4,}['"]'''
+keywords = ["password", "passwd", "pwd"]

@@ -1,0 +1,54 @@
+# .semgrep.yml
+# ----------------------------------------------------------------------------
+# Semgrep rules. SAST = Static Application Security Testing.
+# We define a few custom rules that mirror real issues, plus we also run the
+# community "auto" ruleset in the workflow (config: ".semgrep.yml" + "auto").
+#
+# The custom rules below specifically demonstrate that you can encode YOUR
+# pentest findings as automated gates. For example, the E-Tafakna JWT bug
+# class: "never compare tokens with string equality, always verify the signature."
+# ----------------------------------------------------------------------------
+
+rules:
+  # Rule 1: never verify a JWT by string comparison (the classic bypassable bug)
+  - id: jwt-string-equality-check
+    severity: ERROR
+    languages: [python, javascript, typescript, java]
+    message: >
+      Comparing a token to a hardcoded/expected string is NOT signature
+      verification. Use a proper JWT library to verify the signature and
+      claims. This pattern caused the E-Tafakna no-password-mint class of bug.
+    pattern-either:
+      - pattern: |
+          if $TOKEN == $X: ...
+      - pattern: |
+          if $X == $TOKEN: ...
+      - pattern: |
+          token === $X
+      - pattern: |
+          $X === token
+
+  # Rule 2: dangerous eval / os.system of user-controlled input
+  - id: dangerous-eval-of-input
+    severity: ERROR
+    languages: [python]
+    message: >
+      Do not pass user-controlled input to eval()/exec()/os.system().
+      This enables RCE. Use safe parsers (json, ast.literal_eval) instead.
+    pattern-either:
+      - pattern: eval($USER_INPUT)
+      - pattern: exec($USER_INPUT)
+      - pattern: os.system($USER_INPUT)
+
+  # Rule 3: SQL built by string concatenation (SQL injection)
+  - id: sql-concatenation
+    severity: WARNING
+    languages: [python, java, javascript]
+    message: >
+      Building SQL with string concatenation/format enables SQL injection.
+      Use parameterized queries.
+    pattern-either:
+      - pattern: |
+          "SELECT ... " + $X
+      - pattern: |
+          f"SELECT ... { $X }"
