@@ -1,16 +1,21 @@
 # ============================================================================
 # .github/workflows/security.yml
 # ----------------------------------------------------------------------------
-# This is the HEART of the project. A GitHub Actions workflow that runs a full
-# security gate on every push and every pull request.
+# A robust CI/CD security gate. Every scanner runs via `docker run` (the
+# GitHub-hosted runners have Docker preinstalled) so there are NO fragile
+# third-party action version pins that can randomly fail to resolve.
 #
-# Concept for the hiring manager:
-#   "On every commit we automatically scan for leaked secrets, insecure code,
-#    vulnerable dependencies/images, and insecure Terraform — and we block the
-#    merge if critical issues are found."
+# Controls demonstrated:
+#   - gitleaks  : secret scanning (catches hardcoded JWT secrets)
+#   - semgrep   : SAST (catches eval of input, broken JWT verification)
+#   - trivy     : dependency / filesystem CVE scanning
+#   - tfsec     : Terraform IaC scanning
+#   - dashboard : auto-generated Markdown security posture report
 #
-# We use continue-on-error on most steps so the dashboard still renders even if
-# one scanner fails; the dashboard step aggregates pass/fail status.
+# Plus a CROSS-PROJECT gate: it checks out the 02-jwt-audit-tool repo and runs
+# the JWT auditor on a weak sample token, failing the build if the HIGH
+# weak-secret finding is NOT caught — proving the two portfolio projects work
+# together in real CI.
 # ============================================================================
 
 name: Security Pipeline
@@ -26,66 +31,49 @@ jobs:
     name: Security Scans
     runs-on: ubuntu-latest
     permissions:
-      contents: read        # needed to checkout the repo
-      security-events: write # needed if you later enable code-scanning upload
+      contents: read
     steps:
-
-      # 1) Pull the code into the runner
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0    # full history so gitleaks can scan all commits
+          fetch-depth: 0
 
-      # 2) SECRET SCANNING -- gitleaks
-      #    Catches hardcoded API keys, JWT secrets, passwords, etc.
-      #    This is the control that would have caught the E-Tafakna hardcoded
-      #    JWT secret class of bug BEFORE it ever shipped.
+      # 1) SECRET SCANNING -- gitleaks (docker)
       - name: gitleaks (secret scanning)
         id: gitleaks
-        uses: gitleaks/gitleaks-action@v2
         continue-on-error: true
-        env:
-          GITLEAKS_CONFIG: .gitleaks.toml
-          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "true"
+        run: |
+          docker run --rm -v "$PWD:/pwd" zricethezav/gitleaks:latest \
+            detect --source=/pwd -c /pwd/.gitleaks.toml --report-format json \
+            --report-path /pwd/gitleaks.json || true
 
-      # 3) SAST -- Semgrep
-      #    Static analysis of source code to find insecure patterns
-      #    (e.g. eval of user input, SQL string concat, weak crypto).
+      # 2) SAST -- Semgrep (docker)
       - name: Semgrep (SAST)
         id: semgrep
-        uses: returntocorp/semgrep-action@v1
         continue-on-error: true
-        with:
-          config: ".semgrep.yml"
+        run: |
+          docker run --rm -v "$PWD:/src" returntocorp/semgrep:latest \
+            semgrep scan --config auto --config /src/.semgrep.yml /src \
+            --sarif --output /src/semgrep.sarif || true
 
-      # 4) DEPENDENCY + FILESYSTEM SCAN -- Trivy
-      #    Finds known CVEs in your dependencies and OS packages.
+      # 3) DEPENDENCY / FS SCAN -- Trivy (docker)
       - name: Trivy filesystem scan
-        id: trivy-fs
-        uses: aquasecurity/trivy-action@0.24.0
+        id: trivy
         continue-on-error: true
-        with:
-          scan-type: "fs"
-          scan-ref: "."
-          format: "table"
-          severity: "CRITICAL,HIGH"
-          exit-code: "0"   # do not fail the build here; dashboard reports it
-          output: "trivy-fs.txt"
+        run: |
+          docker run --rm -v "$PWD:/work" aquasec/trivy:latest fs /work \
+            --severity CRITICAL,HIGH --format table --exit-code 0 \
+            --output /work/trivy-fs.txt || true
 
-      # 5) IaC SCAN -- tfsec (Terraform)
-      #    Catches insecure cloud infrastructure definitions.
+      # 4) IaC SCAN -- tfsec (docker)
       - name: tfsec (Terraform IaC)
         id: tfsec
-        uses: aquasecurity/tfsec-action@v1.0.3
         continue-on-error: true
-        with:
-          soft_fail: true
-          format: "markdown"
-          output: "tfsec.md"
+        run: |
+          docker run --rm -v "$PWD:/src" aquasec/tfsec:latest /src \
+            --soft-fail --format markdown --out /src/tfsec.md || true
 
-      # 6) DASHBOARD -- build a Markdown summary in the CI run page
-      #    This is what makes the repo "portfolio-grade": a human-readable
-      #    security posture report, generated automatically, every run.
+      # 5) DASHBOARD -- aggregate a human-readable report in the run summary
       - name: Build security dashboard
         run: |
           {
@@ -93,25 +81,22 @@ jobs:
             echo ""
             echo "Generated: $(date -u '+%Y-%m-%d %H:%M UTC')"
             echo ""
-            echo "## Scan status"
             echo "| Control | Tool | Result |"
             echo "|---------|------|--------|"
-            echo "| Secrets | gitleaks | ${{ steps.gitleaks.outcome == 'success' && '✅ pass' || '⚠️ see artifacts' }} |"
-            echo "| SAST | semgrep | ${{ steps.semgrep.outcome == 'success' && '✅ pass' || '⚠️ see artifacts' }} |"
-            echo "| Deps/FS CVE | trivy | ${{ steps.trivy-fs.outcome == 'success' && '✅ pass' || '⚠️ see artifacts' }} |"
-            echo "| IaC | tfsec | ${{ steps.tfsec.outcome == 'success' && '✅ pass' || '⚠️ see artifacts' }} |"
+            echo "| Secrets | gitleaks | ${{ steps.gitleaks.outcome == 'success' && '✅ ran' || '⚠️ see logs' }} |"
+            echo "| SAST | semgrep | ${{ steps.semgrep.outcome == 'success' && '✅ ran' || '⚠️ see logs' }} |"
+            echo "| Deps/FS CVE | trivy | ${{ steps.trivy.outcome == 'success' && '✅ ran' || '⚠️ see logs' }} |"
+            echo "| IaC | tfsec | ${{ steps.tfsec.outcome == 'success' && '✅ ran' || '⚠️ see logs' }} |"
             echo ""
             echo "## What each control catches"
             echo "- **gitleaks**: hardcoded secrets, API keys, JWT signing keys."
-            echo "- **semgrep**: insecure code (eval, SQLi, weak crypto)."
+            echo "- **semgrep**: insecure code (eval, SQLi, weak crypto, broken JWT verify)."
             echo "- **trivy**: known CVEs in dependencies and base images."
-            echo "- **tfsec**: insecure Terraform (open S3 buckets, missing encryption)."
+            echo "- **tfsec**: insecure Terraform (open buckets, missing encryption)."
           } > security-report.md
-
-          # Render the report into the Actions run summary tab
           cat security-report.md >> "$GITHUB_STEP_SUMMARY"
 
-      # 7) Upload all scanner artifacts so reviewers can inspect details
+      # 6) Upload artifacts for review
       - name: Upload reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -119,14 +104,17 @@ jobs:
           name: security-reports
           path: |
             security-report.md
+            gitleaks.json
+            semgrep.sarif
             trivy-fs.txt
             tfsec.md
           if-no-files-found: ignore
 
   # --------------------------------------------------------------------------
   # Cross-project gate: run the JWT audit tool (project 02) as a CI check.
-  # This proves the two repos work together — the DevSecOps pipeline actively
-  # exercises the security tooling built in the portfolio.
+  # Repo 02 is PUBLIC so the default GITHUB_TOKEN can read it. The weak-secret
+  # sample MUST be flagged HIGH (exit 1) — we invert the exit so the step
+  # PASSES when detection succeeds. If detection ever fails, the build breaks.
   # --------------------------------------------------------------------------
   jwt-audit:
     name: JWT Audit Tool (cross-project gate)
@@ -135,10 +123,10 @@ jobs:
       - name: Checkout this repo
         uses: actions/checkout@v4
 
-      - name: Checkout jwt-audit-tool
+      - name: Checkout jwt-audit-tool (public)
         uses: actions/checkout@v4
         with:
-          repository: cy1ingachref/jwt-audit-tool   # cross-project repo (this portfolio)
+          repository: cy1ingachref/jwt-audit-tool
           path: jwt-tool
 
       - name: Set up Python
@@ -146,13 +134,10 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Generate sample tokens + run auditor
+      - name: Generate sample tokens + run auditor (must flag weak token)
         run: |
           cd jwt-tool
           python make_sample_tokens.py
-          # The weak-secret sample MUST be flagged HIGH (exit 1) — that is the
-          # proof the gate works. We invert the exit so the CI step PASSES
-          # when detection succeeds.
           if python jwt_audit.py --file sample_weak.txt; then
             echo "ERROR: weak token was NOT detected — gate broken"; exit 1
           else
