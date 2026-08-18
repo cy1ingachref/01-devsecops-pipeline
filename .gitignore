@@ -10,3 +10,5 @@ tfsec.md
 # OS
 .DS_Store
 Thumbs.db
+
+# trigger cross-project CI gate
