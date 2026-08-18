@@ -112,22 +112,25 @@ jobs:
 
   # --------------------------------------------------------------------------
   # Cross-project gate: run the JWT audit tool (project 02) as a CI check.
-  # Repo 02 is PUBLIC so the default GITHUB_TOKEN can read it. The weak-secret
-  # sample MUST be flagged HIGH (exit 1) — we invert the exit so the step
-  # PASSES when detection succeeds. If detection ever fails, the build breaks.
+  # Repo 02 is PUBLIC, so we fetch its files directly from raw.githubusercontent
+  # (unauthenticated) — this avoids the GITHUB_TOKEN cross-repo scope limit that
+  # makes actions/checkout fail with 404 on a sibling repo.
+  # The weak-secret sample MUST be flagged HIGH (exit 1) — we invert the exit so
+  # the step PASSES when detection succeeds. If detection ever fails, the build
+  # breaks.
   # --------------------------------------------------------------------------
   jwt-audit:
     name: JWT Audit Tool (cross-project gate)
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout this repo
-        uses: actions/checkout@v4
-
-      - name: Checkout jwt-audit-tool (public)
-        uses: actions/checkout@v4
-        with:
-          repository: cy1ingachref/jwt-audit-tool
-          path: jwt-tool
+      - name: Fetch jwt-audit-tool (public) from raw GitHub
+        run: |
+          mkdir -p jwt-tool
+          BASE=https://raw.githubusercontent.com/cy1ingachref/02-jwt-audit-tool/main
+          for f in jwt_audit.py make_sample_tokens.py pyproject.toml; do
+            curl -fsSL "$BASE/$f" -o "jwt-tool/$f"
+          done
+          echo "Fetched:"; ls -1 jwt-tool
 
       - name: Set up Python
         uses: actions/setup-python@v5
