@@ -4,7 +4,7 @@ A production-oriented DevSecOps CI/CD security pipeline implemented with GitHub 
 
 Why this project matters
 
-- Demonstrates end-to-end automation of security testing in CI/CD (high recruiter value).
+- Demonstrates end-to-end automation of security testing in CI/CD.
 - Shows practical integration of multiple scanners into a single workflow and a machine-readable findings dashboard.
 - Includes a minimal vulnerable sample application so you can observe the pipeline catching real issues.
 
