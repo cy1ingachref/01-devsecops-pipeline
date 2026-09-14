@@ -1,45 +1,34 @@
 # 01 — DevSecOps Security Pipeline as Code
 
-A production-oriented DevSecOps CI/CD security pipeline implemented with GitHub Actions. This repository demonstrates how to automatically enforce security checks on every commit using industry tools so teams catch secrets, insecure code, vulnerable dependencies, and unsafe infrastructure-as-code before merging.
+A production-oriented DevSecOps CI/CD security pipeline implemented with GitHub Actions. This repository demonstrates how to automatically enforce security checks on every commit using industry-standard tools — catching secrets, insecure code, vulnerable dependencies, and unsafe infrastructure-as-code before merging.
 
-Why this project matters
+## What it does
 
-- Demonstrates end-to-end automation of security testing in CI/CD.
-- Shows practical integration of multiple scanners into a single workflow and a machine-readable findings dashboard.
-- Includes a minimal vulnerable sample application so you can observe the pipeline catching real issues.
+- **Secret scanning** — gitleaks detects hardcoded credentials, tokens, and API keys
+- **Static analysis** — Semgrep identifies insecure code patterns and OWASP vulnerabilities
+- **Container scanning** — Trivy finds CVEs in filesystem and container images
+- **IaC scanning** — tfsec flags misconfigurations in Terraform code
+- **Consolidated reporting** — All findings rendered into a machine-readable `security-report.md`
 
-Key components
+## Why it matters
 
-- GitHub Actions workflow that runs on push and pull request
-  - gitleaks — secret scanning
-  - Semgrep — static application security testing (SAST)
-  - Trivy — filesystem and container image CVE scanning
-  - tfsec — Terraform IaC scanning
-  - Consolidated findings rendered as `security-report.md` in the run summary
-- sample app/ — intentionally lightly vulnerable sample application used for demos
-- Per-tool configuration files (customize rules, allowlists, thresholds)
+Security scanning is only valuable when it's automated and enforced. This pipeline runs on every push and pull request, ensuring no vulnerable code reaches production accidentally. The consolidated dashboard gives security teams a single view of all findings across tools.
 
-Quick start (cloud / GitHub)
+## Quick start
 
-1. Push this repository to a GitHub remote (or fork).
-2. Open the repository’s Actions tab — workflows run automatically on push/PR.
-3. Review the run summary and `security-report.md` artifact to see findings.
+```bash
+# Push to GitHub — workflows run automatically
+git push origin main
 
-Run tools locally (Docker)
+# Or run tools locally with Docker
+docker run --rm -v "$PWD:/pwd" zricethezav/gitleaks:latest detect --source /pwd
+```
 
-# gitleaks
-docker run --rm -v "$PWD:/pwd" zricethezav/gitleaks:latest detect --source=/pwd -c .gitleaks.toml
+## Requirements
 
-# semgrep
-docker run --rm -v "$PWD:/src" returntocorp/semgrep semgrep scan --config auto --config .semgrep.yml /src
+- GitHub account (for Actions)
+- Docker (for local tool testing)
 
-# trivy (filesystem)
-docker run --rm -v "$PWD:/work" aquasec/trivy:latest fs /work
+## License
 
-# tfsec
-docker run --rm -v "$PWD:/src" aquasec/tfsec:latest /src
-
-Notes
-
-- The sample app intentionally contains a hardcoded secret and an unsafe `eval` so the pipeline has demonstrable findings. In production, fix these issues; in demos, keep them to exercise the checks.
-- See GUIDE.md for a line-by-line walkthrough of the workflow and configuration.
+MIT
